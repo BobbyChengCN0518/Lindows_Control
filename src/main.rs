@@ -536,7 +536,7 @@ impl eframe::App for ControlPanelApp {
     }
 }
 
-// ==================== 调用 Linux 系统设置 ====================
+// ==================== 调用 Linux 系统设置（非阻塞） ====================
 fn open_linux_settings(panel_type: &str, template: &str) {
     let panel_arg = match panel_type {
         "" => "",
@@ -553,29 +553,21 @@ fn open_linux_settings(panel_type: &str, template: &str) {
         return;
     }
 
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
-        .status();
-
-    match status {
-        Ok(_) => println!("已执行: {}", cmd),
-        Err(e) => eprintln!("执行失败: {} (错误: {})", cmd, e),
+    // 使用 spawn 启动子进程，立即返回
+    match Command::new("sh").arg("-c").arg(&cmd).spawn() {
+        Ok(_) => println!("已启动: {}", cmd),
+        Err(e) => eprintln!("启动失败: {} (错误: {})", cmd, e),
     }
 }
 
-// ==================== 执行自定义命令 ====================
+// ==================== 执行自定义命令（非阻塞） ====================
 fn execute_custom_command(command: &str) {
     if command.trim().is_empty() {
         eprintln!("命令为空");
         return;
     }
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .status();
-    match status {
-        Ok(_) => println!("已执行: {}", command),
-        Err(e) => eprintln!("执行失败: {} (错误: {})", command, e),
+    match Command::new("sh").arg("-c").arg(command).spawn() {
+        Ok(_) => println!("已启动: {}", command),
+        Err(e) => eprintln!("启动失败: {} (错误: {})", command, e),
     }
 }
