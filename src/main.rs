@@ -6,6 +6,12 @@ use std::process::Command;
 
 // ==================== 配置结构体 ====================
 #[derive(Serialize, Deserialize, Clone)]
+struct CustomButton {
+    label: String,
+    command: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 struct AppConfig {
     dark_mode: bool,
     scale_factor: f32,
@@ -15,6 +21,7 @@ struct AppConfig {
     font_size: f32,
     show_icons: bool,
     button_labels: ButtonLabels,
+    custom_buttons: Vec<CustomButton>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -51,6 +58,7 @@ impl Default for AppConfig {
             font_size: 16.0,
             show_icons: true,
             button_labels: ButtonLabels::default(),
+            custom_buttons: vec![],
         }
     }
 }
@@ -66,8 +74,12 @@ struct ControlPanelApp {
     font_size: f32,
     show_icons: bool,
     button_labels: ButtonLabels,
+    custom_buttons: Vec<CustomButton>,
     config_path: PathBuf,
     temp_labels: ButtonLabels,
+    // 设置窗口中添加新按钮的临时输入
+    new_btn_label: String,
+    new_btn_cmd: String,
 }
 
 impl ControlPanelApp {
@@ -83,6 +95,7 @@ impl ControlPanelApp {
                 self.show_icons = config.show_icons;
                 self.button_labels = config.button_labels.clone();
                 self.temp_labels = config.button_labels.clone();
+                self.custom_buttons = config.custom_buttons.clone();
                 return;
             }
         }
@@ -96,6 +109,7 @@ impl ControlPanelApp {
         self.show_icons = default_config.show_icons;
         self.button_labels = default_config.button_labels.clone();
         self.temp_labels = default_config.button_labels.clone();
+        self.custom_buttons = default_config.custom_buttons.clone();
         self.save_config();
     }
 
@@ -109,6 +123,7 @@ impl ControlPanelApp {
             font_size: self.font_size,
             show_icons: self.show_icons,
             button_labels: self.button_labels.clone(),
+            custom_buttons: self.custom_buttons.clone(),
         };
         if let Ok(json) = serde_json::to_string_pretty(&config) {
             let _ = fs::write(&self.config_path, json);
@@ -129,6 +144,26 @@ impl ControlPanelApp {
         };
         self.save_config();
     }
+
+    fn add_custom_button(&mut self) {
+        if self.new_btn_label.trim().is_empty() || self.new_btn_cmd.trim().is_empty() {
+            return;
+        }
+        self.custom_buttons.push(CustomButton {
+            label: self.new_btn_label.trim().to_string(),
+            command: self.new_btn_cmd.trim().to_string(),
+        });
+        self.new_btn_label.clear();
+        self.new_btn_cmd.clear();
+        self.save_config();
+    }
+
+    fn remove_custom_button(&mut self, index: usize) {
+        if index < self.custom_buttons.len() {
+            self.custom_buttons.remove(index);
+            self.save_config();
+        }
+    }
 }
 
 impl Default for ControlPanelApp {
@@ -145,8 +180,11 @@ impl Default for ControlPanelApp {
             font_size: 16.0,
             show_icons: true,
             button_labels: default_labels.clone(),
-            temp_labels: default_labels,
+            custom_buttons: vec![],
             config_path,
+            temp_labels: default_labels,
+            new_btn_label: String::new(),
+            new_btn_cmd: String::new(),
         };
         app.load_config();
         app
@@ -235,6 +273,7 @@ impl eframe::App for ControlPanelApp {
             ui.separator();
             ui.add_space(15.0);
 
+            // ---- 固定按钮网格 ----
             egui::Grid::new("button_grid")
                 .spacing([20.0, 15.0])
                 .min_col_width(170.0)
@@ -267,8 +306,38 @@ impl eframe::App for ControlPanelApp {
                     }
                 });
 
+            // ---- 自定义按钮区域 ----
+            if !self.custom_buttons.is_empty() {
+                ui.add_space(15.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                egui::Grid::new("custom_button_grid")
+                    .spacing([20.0, 15.0])
+                    .min_col_width(170.0)
+                    .show(ui, |ui| {
+                        let mut col_count = 0;
+                        for btn in &self.custom_buttons {
+                            let label = if self.show_icons { "🔹 " } else { "" };
+                            let full_label = format!("{}{}", label, btn.label);
+                            if ui.button(full_label).clicked() {
+                                execute_custom_command(&btn.command);
+                            }
+                            col_count += 1;
+                            if col_count % 4 == 0 {
+                                ui.end_row();
+                            }
+                        }
+                        let remaining = (4 - col_count % 4) % 4;
+                        for _ in 0..remaining {
+                            ui.label("");
+                        }
+                    });
+            }
+
             ui.add_space(20.0);
 
+            // ---- 设置按钮 ----
             ui.horizontal_centered(|ui| {
                 let settings_label = if self.show_icons { "⚙️ " } else { "" };
                 if ui.button(format!("{}{}", settings_label, self.button_labels.settings)).clicked() {
@@ -277,12 +346,12 @@ impl eframe::App for ControlPanelApp {
             });
         });
 
-        // ========== 设置窗口（加宽版） ==========
+        // ---- 设置窗口 ----
         if self.show_settings {
             egui::Window::new("设置")
                 .resizable(false)
                 .collapsible(false)
-                .default_size(egui::vec2(550.0, 500.0))  // 宽度增加到 550
+                .default_size(egui::vec2(550.0, 700.0))
                 .show(ctx, |ui| {
                     ui.heading("设置");
                     ui.separator();
@@ -356,16 +425,15 @@ impl eframe::App for ControlPanelApp {
 
                     ui.add_space(15.0);
 
-                    // ---- 命令模板（加宽文本框） ----
+                    // ---- 命令模板 ----
                     ui.label("系统设置命令模板：");
                     ui.label("提示：使用 {panel} 作为子面板占位符（留空表示主界面）");
                     ui.add_space(5.0);
                     let mut tmp = self.cmd_template.clone();
-                    // 让文本框占满宽度
                     let response = ui.add(
                         TextEdit::singleline(&mut tmp)
                             .hint_text("输入命令模板")
-                            .desired_width(f32::INFINITY)  // 拉伸到最宽
+                            .desired_width(f32::INFINITY)
                     );
                     if response.changed() {
                         self.cmd_template = tmp;
@@ -387,7 +455,51 @@ impl eframe::App for ControlPanelApp {
 
                     ui.add_space(15.0);
 
-                    // ---- 按钮文本自定义（加宽文本框） ----
+                    // ---- 自定义按钮管理 ----
+                    ui.label("自定义按钮管理：");
+                    ui.separator();
+
+                    // 添加新按钮
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label("标签");
+                            ui.add(TextEdit::singleline(&mut self.new_btn_label).hint_text("按钮文字").desired_width(150.0));
+                        });
+                        ui.vertical(|ui| {
+                            ui.label("命令");
+                            ui.add(TextEdit::singleline(&mut self.new_btn_cmd).hint_text("要执行的命令").desired_width(200.0));
+                        });
+                        if ui.button("添加").clicked() {
+                            self.add_custom_button();
+                        }
+                    });
+
+                    ui.add_space(10.0);
+
+                    // 已有按钮列表
+                    if self.custom_buttons.is_empty() {
+                        ui.label("暂无自定义按钮");
+                    } else {
+                        // ===== 修复借用冲突：先克隆再遍历 =====
+                        let buttons = self.custom_buttons.clone();
+                        egui::Grid::new("custom_list")
+                            .spacing([10.0, 5.0])
+                            .show(ui, |ui| {
+                                for (i, btn) in buttons.iter().enumerate() {
+                                    ui.label(&btn.label);
+                                    ui.label(&btn.command);
+                                    if ui.button("删除").clicked() {
+                                        // 使用克隆体中的索引删除原始数据
+                                        self.remove_custom_button(i);
+                                    }
+                                    ui.end_row();
+                                }
+                            });
+                    }
+
+                    ui.add_space(15.0);
+
+                    // ---- 按钮文本自定义 ----
                     ui.label("自定义按钮文本：");
                     ui.add_space(5.0);
                     let mut labels_changed = false;
@@ -449,5 +561,21 @@ fn open_linux_settings(panel_type: &str, template: &str) {
     match status {
         Ok(_) => println!("已执行: {}", cmd),
         Err(e) => eprintln!("执行失败: {} (错误: {})", cmd, e),
+    }
+}
+
+// ==================== 执行自定义命令 ====================
+fn execute_custom_command(command: &str) {
+    if command.trim().is_empty() {
+        eprintln!("命令为空");
+        return;
+    }
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .status();
+    match status {
+        Ok(_) => println!("已执行: {}", command),
+        Err(e) => eprintln!("执行失败: {} (错误: {})", command, e),
     }
 }
