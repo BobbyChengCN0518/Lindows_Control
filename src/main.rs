@@ -1,5 +1,6 @@
-use eframe::egui::{self, FontData, FontDefinitions, TextEdit};
+use eframe::egui::{self, FontData, FontDefinitions, TextEdit, ComboBox};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -20,31 +21,8 @@ struct AppConfig {
     window_height: f32,
     font_size: f32,
     show_icons: bool,
-    button_labels: ButtonLabels,
+    language: String,
     custom_buttons: Vec<CustomButton>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct ButtonLabels {
-    system: String,
-    network: String,
-    apps: String,
-    users: String,
-    main: String,
-    settings: String,
-}
-
-impl Default for ButtonLabels {
-    fn default() -> Self {
-        Self {
-            system: "系统设置".to_string(),
-            network: "网络设置".to_string(),
-            apps: "程序和功能".to_string(),
-            users: "用户账户".to_string(),
-            main: "控制面板 (主界面)".to_string(),
-            settings: "设置".to_string(),
-        }
-    }
 }
 
 impl Default for AppConfig {
@@ -57,9 +35,33 @@ impl Default for AppConfig {
             window_height: 480.0,
             font_size: 16.0,
             show_icons: true,
-            button_labels: ButtonLabels::default(),
+            language: "zh".to_string(),
             custom_buttons: vec![],
         }
+    }
+}
+
+// ==================== 翻译系统 ====================
+type TranslationMap = HashMap<String, String>;
+
+struct Translations {
+    current_lang: String,
+    maps: HashMap<String, TranslationMap>,
+    available_langs: Vec<String>,
+}
+
+impl Translations {
+    // 返回 String 以避免生命周期问题
+    fn tr(&self, key: &str) -> String {
+        self.maps
+            .get(&self.current_lang)
+            .and_then(|map| map.get(key))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| key.to_string())
+    }
+
+    fn available_langs(&self) -> &[String] {
+        &self.available_langs
     }
 }
 
@@ -73,11 +75,9 @@ struct ControlPanelApp {
     window_height: f32,
     font_size: f32,
     show_icons: bool,
-    button_labels: ButtonLabels,
     custom_buttons: Vec<CustomButton>,
     config_path: PathBuf,
-    temp_labels: ButtonLabels,
-    // 设置窗口中添加新按钮的临时输入
+    translations: Translations,
     new_btn_label: String,
     new_btn_cmd: String,
 }
@@ -93,9 +93,12 @@ impl ControlPanelApp {
                 self.window_height = config.window_height;
                 self.font_size = config.font_size;
                 self.show_icons = config.show_icons;
-                self.button_labels = config.button_labels.clone();
-                self.temp_labels = config.button_labels.clone();
                 self.custom_buttons = config.custom_buttons.clone();
+                if self.translations.maps.contains_key(&config.language) {
+                    self.translations.current_lang = config.language;
+                } else if !self.translations.available_langs.is_empty() {
+                    self.translations.current_lang = self.translations.available_langs[0].clone();
+                }
                 return;
             }
         }
@@ -107,9 +110,12 @@ impl ControlPanelApp {
         self.window_height = default_config.window_height;
         self.font_size = default_config.font_size;
         self.show_icons = default_config.show_icons;
-        self.button_labels = default_config.button_labels.clone();
-        self.temp_labels = default_config.button_labels.clone();
         self.custom_buttons = default_config.custom_buttons.clone();
+        if self.translations.maps.contains_key(&default_config.language) {
+            self.translations.current_lang = default_config.language;
+        } else if !self.translations.available_langs.is_empty() {
+            self.translations.current_lang = self.translations.available_langs[0].clone();
+        }
         self.save_config();
     }
 
@@ -122,17 +128,12 @@ impl ControlPanelApp {
             window_height: self.window_height,
             font_size: self.font_size,
             show_icons: self.show_icons,
-            button_labels: self.button_labels.clone(),
+            language: self.translations.current_lang.clone(),
             custom_buttons: self.custom_buttons.clone(),
         };
         if let Ok(json) = serde_json::to_string_pretty(&config) {
             let _ = fs::write(&self.config_path, json);
         }
-    }
-
-    fn apply_button_labels(&mut self) {
-        self.button_labels = self.temp_labels.clone();
-        self.save_config();
     }
 
     fn set_preset(&mut self, preset: &str) {
@@ -164,30 +165,136 @@ impl ControlPanelApp {
             self.save_config();
         }
     }
+
+    // 方便调用，返回 String
+    fn tr(&self, key: &str) -> String {
+        self.translations.tr(key)
+    }
 }
 
-impl Default for ControlPanelApp {
-    fn default() -> Self {
-        let config_path = PathBuf::from("config.json");
-        let default_labels = ButtonLabels::default();
-        let mut app = Self {
-            show_settings: false,
-            dark_mode: false,
-            scale_factor: 1.0,
-            cmd_template: String::new(),
-            window_width: 800.0,
-            window_height: 480.0,
-            font_size: 16.0,
-            show_icons: true,
-            button_labels: default_labels.clone(),
-            custom_buttons: vec![],
-            config_path,
-            temp_labels: default_labels,
-            new_btn_label: String::new(),
-            new_btn_cmd: String::new(),
-        };
-        app.load_config();
-        app
+// ==================== 初始化翻译系统 ====================
+const DEFAULT_ZH: &str = r#"{
+    "window_title": "Lindows 控制面板",
+    "main_title": "Lindows 控制面板",
+    "button_system": "系统设置",
+    "button_network": "网络设置",
+    "button_apps": "程序和功能",
+    "button_users": "用户账户",
+    "button_main": "控制面板 (主界面)",
+    "button_settings": "设置",
+    "settings_title": "设置",
+    "settings_theme": "主题",
+    "settings_theme_light": "亮色",
+    "settings_theme_dark": "暗色",
+    "settings_scale": "界面缩放",
+    "settings_font_size": "字体大小",
+    "settings_window_size": "窗口大小",
+    "settings_width": "宽",
+    "settings_height": "高",
+    "settings_restart_hint": "（更改窗口大小需要重启程序生效）",
+    "settings_show_icons": "显示图标",
+    "settings_cmd_template": "系统设置命令模板",
+    "settings_cmd_hint": "提示：使用 {panel} 作为子面板占位符（留空表示主界面）",
+    "settings_cmd_placeholder": "输入命令模板",
+    "settings_preset_gnome": "GNOME",
+    "settings_preset_kde": "KDE",
+    "settings_preset_xfce": "XFCE",
+    "settings_custom_buttons": "自定义按钮管理",
+    "settings_add_label": "标签",
+    "settings_add_command": "命令",
+    "settings_add_button": "添加",
+    "settings_no_custom": "暂无自定义按钮",
+    "settings_delete": "删除",
+    "settings_close": "关闭设置",
+    "settings_language": "语言"
+}"#;
+
+const DEFAULT_EN: &str = r#"{
+    "window_title": "Lindows Control Panel",
+    "main_title": "Lindows Control Panel",
+    "button_system": "System Settings",
+    "button_network": "Network Settings",
+    "button_apps": "Apps & Features",
+    "button_users": "User Accounts",
+    "button_main": "Control Panel (Main)",
+    "button_settings": "Settings",
+    "settings_title": "Settings",
+    "settings_theme": "Theme",
+    "settings_theme_light": "Light",
+    "settings_theme_dark": "Dark",
+    "settings_scale": "UI Scale",
+    "settings_font_size": "Font Size",
+    "settings_window_size": "Window Size",
+    "settings_width": "Width",
+    "settings_height": "Height",
+    "settings_restart_hint": "(Changing window size requires restart)",
+    "settings_show_icons": "Show Icons",
+    "settings_cmd_template": "System Settings Command Template",
+    "settings_cmd_hint": "Hint: use {panel} as panel placeholder (leave empty for main)",
+    "settings_cmd_placeholder": "Enter command template",
+    "settings_preset_gnome": "GNOME",
+    "settings_preset_kde": "KDE",
+    "settings_preset_xfce": "XFCE",
+    "settings_custom_buttons": "Custom Buttons",
+    "settings_add_label": "Label",
+    "settings_add_command": "Command",
+    "settings_add_button": "Add",
+    "settings_no_custom": "No custom buttons",
+    "settings_delete": "Delete",
+    "settings_close": "Close Settings",
+    "settings_language": "Language"
+}"#;
+
+fn init_translations() -> Translations {
+    let lang_dir = PathBuf::from("lang");
+    if !lang_dir.exists() {
+        let _ = fs::create_dir(&lang_dir);
+    }
+    let zh_path = lang_dir.join("zh.json");
+    if !zh_path.exists() {
+        let _ = fs::write(&zh_path, DEFAULT_ZH);
+    }
+    let en_path = lang_dir.join("en.json");
+    if !en_path.exists() {
+        let _ = fs::write(&en_path, DEFAULT_EN);
+    }
+
+    let mut maps = HashMap::new();
+    let mut available = Vec::new();
+    if let Ok(entries) = fs::read_dir(&lang_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Some(lang_code) = path.file_stem().and_then(|s| s.to_str()) {
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&content) {
+                            maps.insert(lang_code.to_string(), map);
+                            available.push(lang_code.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if maps.is_empty() {
+        let zh_map: HashMap<String, String> = serde_json::from_str(DEFAULT_ZH).unwrap_or_default();
+        let en_map: HashMap<String, String> = serde_json::from_str(DEFAULT_EN).unwrap_or_default();
+        maps.insert("zh".to_string(), zh_map);
+        maps.insert("en".to_string(), en_map);
+        available = vec!["zh".to_string(), "en".to_string()];
+    }
+
+    let default_lang = if available.contains(&"zh".to_string()) {
+        "zh".to_string()
+    } else {
+        available.first().cloned().unwrap_or_else(|| "zh".to_string())
+    };
+
+    Translations {
+        current_lang: default_lang,
+        maps,
+        available_langs: available,
     }
 }
 
@@ -195,7 +302,24 @@ impl Default for ControlPanelApp {
 fn main() -> Result<(), eframe::Error> {
     std::env::set_var("WINIT_UNIX_BACKEND", "x11");
 
-    let app = ControlPanelApp::default();
+    let translations = init_translations();
+    let mut app = ControlPanelApp {
+        show_settings: false,
+        dark_mode: false,
+        scale_factor: 1.0,
+        cmd_template: String::new(),
+        window_width: 800.0,
+        window_height: 480.0,
+        font_size: 16.0,
+        show_icons: true,
+        custom_buttons: vec![],
+        config_path: PathBuf::from("config.json"),
+        translations,
+        new_btn_label: String::new(),
+        new_btn_cmd: String::new(),
+    };
+    app.load_config();
+
     let window_size = egui::vec2(app.window_width, app.window_height);
 
     let mut fonts = FontDefinitions::default();
@@ -221,8 +345,10 @@ fn main() -> Result<(), eframe::Error> {
         ..Default::default()
     };
 
+    // 注意：run_native 需要 &str，我们传递 &app.tr(...) 临时值的引用
+    let title = app.tr("window_title");
     eframe::run_native(
-        "Lindows 控制面板",
+        &title,
         options,
         Box::new(|cc| {
             cc.egui_ctx.set_fonts(fonts);
@@ -269,7 +395,7 @@ impl eframe::App for ControlPanelApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.style_mut().spacing.button_padding = egui::vec2(16.0, 10.0);
 
-            ui.heading("Lindows 控制面板");
+            ui.heading(self.tr("main_title"));
             ui.separator();
             ui.add_space(15.0);
 
@@ -284,21 +410,21 @@ impl eframe::App for ControlPanelApp {
                     let icon4 = if self.show_icons { "👤 " } else { "" };
                     let icon5 = if self.show_icons { "⚙️ " } else { "" };
 
-                    if ui.button(format!("{}{}", icon1, self.button_labels.system)).clicked() {
+                    if ui.button(format!("{}{}", icon1, self.tr("button_system"))).clicked() {
                         open_linux_settings("system", &self.cmd_template);
                     }
-                    if ui.button(format!("{}{}", icon2, self.button_labels.network)).clicked() {
+                    if ui.button(format!("{}{}", icon2, self.tr("button_network"))).clicked() {
                         open_linux_settings("network", &self.cmd_template);
                     }
-                    if ui.button(format!("{}{}", icon3, self.button_labels.apps)).clicked() {
+                    if ui.button(format!("{}{}", icon3, self.tr("button_apps"))).clicked() {
                         open_linux_settings("applications", &self.cmd_template);
                     }
-                    if ui.button(format!("{}{}", icon4, self.button_labels.users)).clicked() {
+                    if ui.button(format!("{}{}", icon4, self.tr("button_users"))).clicked() {
                         open_linux_settings("users", &self.cmd_template);
                     }
                     ui.end_row();
 
-                    if ui.button(format!("{}{}", icon5, self.button_labels.main)).clicked() {
+                    if ui.button(format!("{}{}", icon5, self.tr("button_main"))).clicked() {
                         open_linux_settings("", &self.cmd_template);
                     }
                     for _ in 0..3 {
@@ -340,7 +466,7 @@ impl eframe::App for ControlPanelApp {
             // ---- 设置按钮 ----
             ui.horizontal_centered(|ui| {
                 let settings_label = if self.show_icons { "⚙️ " } else { "" };
-                if ui.button(format!("{}{}", settings_label, self.button_labels.settings)).clicked() {
+                if ui.button(format!("{}{}", settings_label, self.tr("button_settings"))).clicked() {
                     self.show_settings = !self.show_settings;
                 }
             });
@@ -348,19 +474,40 @@ impl eframe::App for ControlPanelApp {
 
         // ---- 设置窗口 ----
         if self.show_settings {
-            egui::Window::new("设置")
+            egui::Window::new(self.tr("settings_title"))
                 .resizable(false)
                 .collapsible(false)
-                .default_size(egui::vec2(550.0, 700.0))
+                .default_size(egui::vec2(550.0, 750.0))
                 .show(ctx, |ui| {
-                    ui.heading("设置");
+                    ui.heading(self.tr("settings_title"));
                     ui.separator();
+                    ui.add_space(10.0);
+
+                    // ---- 语言选择 ----
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{}:", self.tr("settings_language")));
+                        let mut lang = self.translations.current_lang.clone();
+                        ComboBox::from_id_source("language_combobox")
+                            .selected_text(&lang)
+                            .show_ui(ui, |ui| {
+                                for code in self.translations.available_langs() {
+                                    ui.selectable_value(&mut lang, code.clone(), code);
+                                }
+                            });
+                        if lang != self.translations.current_lang {
+                            if self.translations.maps.contains_key(&lang) {
+                                self.translations.current_lang = lang;
+                                self.save_config();
+                            }
+                        }
+                    });
+
                     ui.add_space(10.0);
 
                     // 主题
                     ui.horizontal(|ui| {
-                        ui.label("主题：");
-                        let label = if self.dark_mode { "暗色" } else { "亮色" };
+                        ui.label(format!("{}:", self.tr("settings_theme")));
+                        let label = if self.dark_mode { self.tr("settings_theme_dark") } else { self.tr("settings_theme_light") };
                         if ui.button(label).clicked() {
                             self.dark_mode = !self.dark_mode;
                             self.save_config();
@@ -371,7 +518,7 @@ impl eframe::App for ControlPanelApp {
 
                     // 缩放
                     ui.horizontal(|ui| {
-                        ui.label("界面缩放：");
+                        ui.label(format!("{}:", self.tr("settings_scale")));
                         let old_scale = self.scale_factor;
                         ui.add(egui::Slider::new(&mut self.scale_factor, 0.8..=2.0).step_by(0.05));
                         if (self.scale_factor - old_scale).abs() > 0.001 {
@@ -383,7 +530,7 @@ impl eframe::App for ControlPanelApp {
 
                     // 字体大小
                     ui.horizontal(|ui| {
-                        ui.label("字体大小：");
+                        ui.label(format!("{}:", self.tr("settings_font_size")));
                         let old_font = self.font_size;
                         ui.add(egui::Slider::new(&mut self.font_size, 10.0..=30.0).step_by(0.5));
                         if (self.font_size - old_font).abs() > 0.001 {
@@ -394,29 +541,29 @@ impl eframe::App for ControlPanelApp {
                     ui.add_space(10.0);
 
                     // 窗口大小
-                    ui.label("窗口大小：");
+                    ui.label(format!("{}:", self.tr("settings_window_size")));
                     ui.horizontal(|ui| {
-                        ui.label("宽");
+                        ui.label(self.tr("settings_width"));
                         let old_w = self.window_width;
                         ui.add(egui::Slider::new(&mut self.window_width, 600.0..=1200.0).step_by(10.0));
                         if (self.window_width - old_w).abs() > 0.1 {
                             self.save_config();
                         }
-                        ui.label("高");
+                        ui.label(self.tr("settings_height"));
                         let old_h = self.window_height;
                         ui.add(egui::Slider::new(&mut self.window_height, 400.0..=900.0).step_by(10.0));
                         if (self.window_height - old_h).abs() > 0.1 {
                             self.save_config();
                         }
                     });
-                    ui.label("（更改窗口大小需要重启程序生效）");
+                    ui.label(self.tr("settings_restart_hint"));
 
                     ui.add_space(10.0);
 
                     // 显示图标
                     ui.horizontal(|ui| {
                         let mut show = self.show_icons;
-                        ui.checkbox(&mut show, "显示图标");
+                        ui.checkbox(&mut show, self.tr("settings_show_icons"));
                         if show != self.show_icons {
                             self.show_icons = show;
                             self.save_config();
@@ -426,13 +573,13 @@ impl eframe::App for ControlPanelApp {
                     ui.add_space(15.0);
 
                     // ---- 命令模板 ----
-                    ui.label("系统设置命令模板：");
-                    ui.label("提示：使用 {panel} 作为子面板占位符（留空表示主界面）");
+                    ui.label(format!("{}:", self.tr("settings_cmd_template")));
+                    ui.label(self.tr("settings_cmd_hint"));
                     ui.add_space(5.0);
                     let mut tmp = self.cmd_template.clone();
                     let response = ui.add(
                         TextEdit::singleline(&mut tmp)
-                            .hint_text("输入命令模板")
+                            .hint_text(self.tr("settings_cmd_placeholder"))
                             .desired_width(f32::INFINITY)
                     );
                     if response.changed() {
@@ -442,13 +589,13 @@ impl eframe::App for ControlPanelApp {
 
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        if ui.button("GNOME").clicked() {
+                        if ui.button(self.tr("settings_preset_gnome")).clicked() {
                             self.set_preset("gnome");
                         }
-                        if ui.button("KDE").clicked() {
+                        if ui.button(self.tr("settings_preset_kde")).clicked() {
                             self.set_preset("kde");
                         }
-                        if ui.button("XFCE").clicked() {
+                        if ui.button(self.tr("settings_preset_xfce")).clicked() {
                             self.set_preset("xfce");
                         }
                     });
@@ -456,20 +603,20 @@ impl eframe::App for ControlPanelApp {
                     ui.add_space(15.0);
 
                     // ---- 自定义按钮管理 ----
-                    ui.label("自定义按钮管理：");
+                    ui.label(format!("{}:", self.tr("settings_custom_buttons")));
                     ui.separator();
 
                     // 添加新按钮
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
-                            ui.label("标签");
-                            ui.add(TextEdit::singleline(&mut self.new_btn_label).hint_text("按钮文字").desired_width(150.0));
+                            ui.label(self.tr("settings_add_label"));
+                            ui.add(TextEdit::singleline(&mut self.new_btn_label).hint_text("").desired_width(150.0));
                         });
                         ui.vertical(|ui| {
-                            ui.label("命令");
-                            ui.add(TextEdit::singleline(&mut self.new_btn_cmd).hint_text("要执行的命令").desired_width(200.0));
+                            ui.label(self.tr("settings_add_command"));
+                            ui.add(TextEdit::singleline(&mut self.new_btn_cmd).hint_text("").desired_width(200.0));
                         });
-                        if ui.button("添加").clicked() {
+                        if ui.button(self.tr("settings_add_button")).clicked() {
                             self.add_custom_button();
                         }
                     });
@@ -478,9 +625,8 @@ impl eframe::App for ControlPanelApp {
 
                     // 已有按钮列表
                     if self.custom_buttons.is_empty() {
-                        ui.label("暂无自定义按钮");
+                        ui.label(self.tr("settings_no_custom"));
                     } else {
-                        // ===== 修复借用冲突：先克隆再遍历 =====
                         let buttons = self.custom_buttons.clone();
                         egui::Grid::new("custom_list")
                             .spacing([10.0, 5.0])
@@ -488,8 +634,7 @@ impl eframe::App for ControlPanelApp {
                                 for (i, btn) in buttons.iter().enumerate() {
                                     ui.label(&btn.label);
                                     ui.label(&btn.command);
-                                    if ui.button("删除").clicked() {
-                                        // 使用克隆体中的索引删除原始数据
+                                    if ui.button(self.tr("settings_delete")).clicked() {
                                         self.remove_custom_button(i);
                                     }
                                     ui.end_row();
@@ -498,37 +643,8 @@ impl eframe::App for ControlPanelApp {
                     }
 
                     ui.add_space(15.0);
-
-                    // ---- 按钮文本自定义 ----
-                    ui.label("自定义按钮文本：");
-                    ui.add_space(5.0);
-                    let mut labels_changed = false;
-
-                    let sys = &mut self.temp_labels.system;
-                    if ui.add(TextEdit::singleline(sys).hint_text("系统设置").desired_width(f32::INFINITY)).changed() { labels_changed = true; }
-                    let net = &mut self.temp_labels.network;
-                    if ui.add(TextEdit::singleline(net).hint_text("网络设置").desired_width(f32::INFINITY)).changed() { labels_changed = true; }
-                    let apps = &mut self.temp_labels.apps;
-                    if ui.add(TextEdit::singleline(apps).hint_text("程序和功能").desired_width(f32::INFINITY)).changed() { labels_changed = true; }
-                    let users = &mut self.temp_labels.users;
-                    if ui.add(TextEdit::singleline(users).hint_text("用户账户").desired_width(f32::INFINITY)).changed() { labels_changed = true; }
-                    let main = &mut self.temp_labels.main;
-                    if ui.add(TextEdit::singleline(main).hint_text("控制面板主界面").desired_width(f32::INFINITY)).changed() { labels_changed = true; }
-                    let settings = &mut self.temp_labels.settings;
-                    if ui.add(TextEdit::singleline(settings).hint_text("设置").desired_width(f32::INFINITY)).changed() { labels_changed = true; }
-
-                    if labels_changed {
-                        // 等待用户点击"应用"
-                    }
-
-                    ui.add_space(5.0);
-                    if ui.button("应用按钮文本").clicked() {
-                        self.apply_button_labels();
-                    }
-
-                    ui.add_space(15.0);
                     ui.separator();
-                    if ui.button("关闭设置").clicked() {
+                    if ui.button(self.tr("settings_close")).clicked() {
                         self.show_settings = false;
                     }
                 });
@@ -553,7 +669,6 @@ fn open_linux_settings(panel_type: &str, template: &str) {
         return;
     }
 
-    // 使用 spawn 启动子进程，立即返回
     match Command::new("sh").arg("-c").arg(&cmd).spawn() {
         Ok(_) => println!("已启动: {}", cmd),
         Err(e) => eprintln!("启动失败: {} (错误: {})", cmd, e),
