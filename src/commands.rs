@@ -1,13 +1,25 @@
 use std::process::Command;
 
 pub fn open_linux_settings(panel_type: &str, template: &str) {
-    let panel_arg = match panel_type {
-        "" => "",
-        "system" => "",
-        "network" => "network",
-        "applications" => "applications",
-        "users" => "users",
-        _ => "",
+    let is_kde = template.contains("systemsettings") || template.contains("kcmshell");
+
+    let panel_arg = if is_kde {
+        match panel_type {
+            "system" => "kcm_systeminformation",
+            "network" => "kcm_networkmanagement",
+            "applications" => "",      // 打开主界面
+            "users" => "kcm_users",
+            _ => "",
+        }
+    } else {
+        match panel_type {
+            "" => "",
+            "system" => "",
+            "network" => "network",
+            "applications" => "applications",
+            "users" => "users",
+            _ => "",
+        }
     };
 
     let cmd = template.replace("{panel}", panel_arg).trim().to_string();

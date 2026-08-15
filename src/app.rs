@@ -82,7 +82,7 @@ impl ControlPanelApp {
     fn set_preset(&mut self, preset: &str) {
         self.cmd_template = match preset {
             "gnome" => "gnome-control-center {panel}".to_string(),
-            "kde" => "systemsettings5 {panel}".to_string(),
+            "kde" => "systemsettings {panel}".to_string(),      // KDE 使用 systemsettings（不带数字）
             "xfce" => "xfce4-settings-manager".to_string(),
             _ => return,
         };
